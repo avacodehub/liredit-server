@@ -16,6 +16,7 @@ import {
 } from "type-graphql";
 import { Post } from "../entities/Post";
 import { getConnection } from "typeorm";
+import { Upvote } from "../entities/Upvote";
 
 @InputType()
 class PostInput {
@@ -40,13 +41,43 @@ export class PostResolver {
     return root.text.slice(0, 50);
   }
 
+  @Mutation(() => Boolean)
+  @UseMiddleware(isAuth)
+  async vote(
+    @Arg("postId", () => Int) postId: number,
+    @Arg("value", () => Int) value: number,
+    @Ctx() { req }: MyContext
+  ) {
+    const isUpvote = value !== -1;
+    const realValue = isUpvote ? 1 : -1;
+    const { userId } = req.session;
+    // await Upvote.insert({
+    //   userId,
+    //   postId,
+    //   value: realValue
+    // })
+    await getConnection().query(`
+    START TRANSACTION;
+
+    insert into upvote ("userId", "postId", value)
+    values (${userId}, ${postId}, ${realValue});
+
+    update post 
+    set points = points + ${realValue}
+    where id = ${postId};
+
+    COMMIT;
+    `);
+    return true;
+  }
+
   @Query(() => PaginatedPosts)
   async posts(
     @Arg("limit", () => Int) limit: number,
     @Arg("cursor", () => String, { nullable: true }) cursor: string | null
   ): Promise<PaginatedPosts> {
     // fetching 21 instead of 20 so can check if there are more posts
-    const realLimit = Math.min(50, limit) + 1;
+    const realLimit = Math.min(50, limit);
     const realLimitPlusOne = realLimit + 1;
 
     const replacements: any[] = [realLimitPlusOne];
@@ -56,8 +87,7 @@ export class PostResolver {
     const posts = await getConnection().query(
       `
       select p.*,
-      u.username
-      json_build_object(
+      json_build_object (
         'id', u.id,
         'username', u.username,
         'email', u.email,
